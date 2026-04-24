@@ -52,11 +52,10 @@ def load_and_crunch_data():
     return data, df, leaders
 
 try:
-    data, df, leaders = load_crunch_data()
+    data, df, leaders = load_and_crunch_data()
 except Exception as e:
     st.error(f"Errore caricamento dati: {e}")
     st.stop()
-
 # --- HEADER BLOOMBERG ---
 st.title("📟 POLYMARKET QUANTITATIVE TERMINAL v2.0")
 s = data['stats']
