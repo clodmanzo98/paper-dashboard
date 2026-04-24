@@ -8,149 +8,111 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- CONFIGURAZIONE TERMINALE ---
-st.set_page_config(page_title="Polymarket Quant Terminal", layout="wide", initial_sidebar_state="collapsed")
-st.markdown("<style> .stMetric {background-color: #1E1E1E; padding: 15px; border-radius: 5px; border: 1px solid #333;} </style>", unsafe_allow_html=True)
+st.set_page_config(page_title="QUANT TERMINAL v2.0 - Polymarket", layout="wide")
+st.markdown("""
+    <style>
+    .stApp { background-color: #0E1117; color: #E0E0E0; }
+    .stMetric { background-color: #161B22; padding: 20px; border-radius: 10px; border: 1px solid #30363D; }
+    </style>
+    """, unsafe_allow_html=True)
 
 base_path = os.path.dirname(__file__)
 json_path = os.path.join(base_path, 'paper_portfolio.json')
 
-# --- MOTORE DATI ---
+# --- MOTORE DI ELABORAZIONE ---
 @st.cache_data
-def load_quant_data():
+def load_and_crunch_data():
     with open(json_path, 'r') as f:
         data = json.load(f)
     
     df = pd.DataFrame(data['history'])
-    if df.empty:
-        return data, df
-    
-    # Parsing temporale
+    if df.empty: return data, df, pd.DataFrame()
+
+    # Formattazione Tempi
     df['dt_entrata'] = pd.to_datetime(df['timestamp'], unit='s')
     df['dt_uscita'] = pd.to_datetime(df['exit_timestamp'], unit='s')
-    df['durata_ore'] = (df['dt_uscita'] - df['dt_entrata']).dt.total_seconds() / 3600
-    df['data_uscita_short'] = df['dt_uscita'].dt.date
+    df['giorno_sett'] = df['dt_uscita'].dt.day_name()
+    df['ora'] = df['dt_uscita'].dt.hour
+    df['durata_h'] = (df['dt_uscita'] - df['dt_entrata']).dt.total_seconds() / 3600
     
-    # Ordinamento cronologico strettissimo
+    # Ordinamento e Equity
     df = df.sort_values('dt_uscita').reset_index(drop=True)
-    
-    # Calcoli Finanziari Complessi
     df['cum_pnl'] = df['pnl'].cumsum()
     df['rolling_max'] = df['cum_pnl'].cummax()
     df['drawdown'] = df['cum_pnl'] - df['rolling_max']
     
-    # Formattazione Leader
-    df['leader_short'] = df['leader'].str[:6] + "..." + df['leader'].str[-4:]
-    
-    return data, df
-
-try:
-    data, df = load_quant_data()
-except Exception as e:
-    st.error(f"Errore critico lettura dati: {e}")
-    st.stop()
-
-# --- CALCOLO METRICHE AVANZATE ---
-vittorie = df[df['pnl'] > 0]
-sconfitte = df[df['pnl'] <= 0]
-
-gross_profit = vittorie['pnl'].sum()
-gross_loss = abs(sconfitte['pnl'].sum())
-profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('inf')
-
-avg_win = vittorie['pnl'].mean() if not vittorie.empty else 0
-avg_loss = abs(sconfitte['pnl'].mean()) if not sconfitte.empty else 0
-risk_reward = avg_win / avg_loss if avg_loss != 0 else float('inf')
-
-max_dd = df['drawdown'].min()
-
-# --- HEADER BLOOMBERG ---
-st.markdown("## 📟 **POLYMARKET QUANTITATIVE TERMINAL**")
-
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Net Profit (PNL)", f"${data['balance'] - data['starting_balance']:.2f}")
-c2.metric("Win Rate", f"{(len(vittorie)/len(df)*100):.2f}%")
-c3.metric("Profit Factor", f"{profit_factor:.2f}x", help="Rapporto tra vincite totali e perdite totali. > 1.5 è eccellente.")
-c4.metric("Avg Risk/Reward", f"{risk_reward:.2f}", help="Quanto vinci in media rispetto a quanto perdi in media.")
-c5.metric("Max Drawdown", f"${max_dd:.2f}", help="La perdita massima subita dal picco più alto.")
-c6.metric("Total Trades", len(df))
-
-st.divider()
-
-# --- RIGA GRAFICI 1: ANDAMENTO E RISCHIO ---
-col_eq, col_daily = st.columns([7, 3])
-
-with col_eq:
-    st.subheader("📈 Equity Curve & Drawdown")
-    # Grafico combinato come i veri terminali
-    fig_eq = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    # Linea Profitto
-    fig_eq.add_trace(
-        go.Scatter(x=df['dt_uscita'], y=df['cum_pnl'], name="Cumulative PNL", line=dict(color='#00ff88', width=2)),
-        secondary_y=False,
-    )
-    # Area Drawdown (Perdite dal picco)
-    fig_eq.add_trace(
-        go.Scatter(x=df['dt_uscita'], y=df['drawdown'], name="Drawdown", fill='tozeroy', fillcolor='rgba(255, 0, 0, 0.2)', line=dict(color='red', width=1)),
-        secondary_y=True,
-    )
-    fig_eq.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0))
-    fig_eq.update_yaxes(title_text="Profitto Netto ($)", secondary_y=False)
-    fig_eq.update_yaxes(title_text="Drawdown ($)", showgrid=False, secondary_y=True)
-    st.plotly_chart(fig_eq, use_container_width=True)
-
-with col_daily:
-    st.subheader("📊 Rendimenti Giornalieri")
-    daily_pnl = df.groupby('data_uscita_short')['pnl'].sum().reset_index()
-    daily_pnl['Color'] = np.where(daily_pnl['pnl'] > 0, '#00ff88', '#ff3333')
-    
-    fig_daily = go.Figure(data=[
-        go.Bar(x=daily_pnl['data_uscita_short'], y=daily_pnl['pnl'], marker_color=daily_pnl['Color'])
-    ])
-    fig_daily.update_layout(height=400, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig_daily, use_container_width=True)
-
-st.divider()
-
-# --- RIGA GRAFICI 2: ANALISI LEADER E TRADE ---
-col_lead, col_dur = st.columns([5, 5])
-
-with col_lead:
-    st.subheader("🎯 Matrice Performance Leader")
-    # Raggruppamento solido e sicuro per i leader
-    leader_df = df.groupby('leader_short').agg(
-        Tot_Profitto=('pnl', 'sum'),
-        Num_Trades=('pnl', 'count'),
-        Win_Rate=('pnl', lambda x: (x > 0).mean() * 100)
+    # Leaderboard Processing
+    leaders = df.groupby('leader').agg(
+        Profitto_Tot=('pnl', 'sum'),
+        Trade_Tot=('pnl', 'count'),
+        Win_Rate=('pnl', lambda x: (x > 0).mean() * 100),
+        ROI_Medio=('pnl_pct', 'mean')
     ).reset_index()
     
-    # Rimuovi chi ha fatto 1 solo trade per non sballare il grafico
-    leader_df = leader_df[leader_df['Num_Trades'] > 1]
-    
-    # Bubble Chart
-    fig_matrix = px.scatter(leader_df, x="Win_Rate", y="Tot_Profitto", size="Num_Trades", color="leader_short",
-                            hover_name="leader_short", size_max=40, template="plotly_dark",
-                            labels={"Win_Rate": "Win Rate (%)", "Tot_Profitto": "Profitto Totale ($)"})
-    fig_matrix.add_hline(y=0, line_dash="dot", line_color="red")
-    fig_matrix.add_vline(x=50, line_dash="dot", line_color="gray")
-    fig_matrix.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig_matrix, use_container_width=True)
+    return data, df, leaders
 
-with col_dur:
-    st.subheader("⏱️ Analisi Holding Time (Durata vs PNL)")
-    # Identifica outlier pazzeschi
-    fig_dur = px.scatter(df, x="durata_ore", y="pnl", color=df["pnl"] > 0,
-                         color_discrete_map={True: '#00ff88', False: '#ff3333'},
-                         labels={"durata_ore": "Ore a Mercato", "pnl": "Profitto/Perdita ($)", "color": "In Profitto"},
-                         template="plotly_dark")
-    fig_dur.update_layout(height=400, margin=dict(l=0, r=0, t=30, b=0), showlegend=False)
-    st.plotly_chart(fig_dur, use_container_width=True)
+try:
+    data, df, leaders = load_crunch_data()
+except Exception as e:
+    st.error(f"Errore caricamento dati: {e}")
+    st.stop()
+
+# --- HEADER BLOOMBERG ---
+st.title("📟 POLYMARKET QUANTITATIVE TERMINAL v2.0")
+s = data['stats']
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("NET PNL", f"${data['balance'] - 100:.2f}", f"{(data['balance']-100):.1f}%")
+c2.metric("WIN RATE", f"{(s['wins']/s['exits']*100):.2f}%")
+c3.metric("PROFIT FACTOR", f"{(s['total_profit']/abs(s['total_loss'])):.2f}x")
+c4.metric("TOTAL TRADES", s['exits'])
+c5.metric("MAX DRAWDOWN", f"${df['drawdown'].min():.2f}", delta_color="inverse")
 
 st.divider()
 
-# --- DATA TABLE AVANZATA ---
-st.subheader("🗄️ Terminal Data Ledger")
-view_cols = ['dt_entrata', 'dt_uscita', 'leader_short', 'market', 'side', 'entry_price', 'exit_price', 'durata_ore', 'pnl', 'exit_reason']
-st.dataframe(df[view_cols].sort_values('dt_uscita', ascending=False).style.format({
-    'entry_price': '{:.3f}', 'exit_price': '{:.3f}', 'pnl': '${:.2f}', 'durata_ore': '{:.1f}h'
-}), use_container_width=True, height=400)
+# --- NAVIGAZIONE SCHEDE ---
+t1, t2, t3, t4 = st.tabs(["📈 EQUITY & RISK", "🎯 LEADERBOARD", "📅 ANALISI TEMPORALE", "📋 LEDGER DETTAGLIATO"])
+
+with t1:
+    col_left, col_right = st.columns([7, 3])
+    with col_left:
+        st.subheader("Performance Cumulativa & Rischio")
+        fig_eq = make_subplots(specs=[[{"secondary_y": True}]])
+        fig_eq.add_trace(go.Scatter(x=df['dt_uscita'], y=df['cum_pnl'], name="Equity", line=dict(color='#00FF41', width=3)), secondary_y=False)
+        fig_eq.add_trace(go.Scatter(x=df['dt_uscita'], y=df['drawdown'], name="Drawdown", fill='tozeroy', fillcolor='rgba(255,0,0,0.1)', line=dict(color='red', width=1)), secondary_y=True)
+        fig_eq.update_layout(template="plotly_dark", height=500)
+        st.plotly_chart(fig_eq, use_container_width=True)
+    with col_right:
+        st.subheader("Distribuzione Esiti")
+        fig_reasons = px.pie(df, names='exit_reason', hole=0.5, template="plotly_dark")
+        st.plotly_chart(fig_reasons, use_container_width=True)
+
+with t2:
+    st.subheader("Analisi Leader Professionale")
+    # Bubble chart corretta
+    fig_lead = px.scatter(leaders[leaders['Trade_Tot'] > 1], x="Win_Rate", y="Profitto_Tot", 
+                          size="Trade_Tot", color="Profitto_Tot", hover_name="leader",
+                          template="plotly_dark", title="Matrice Efficienza Leader")
+    st.plotly_chart(fig_lead, use_container_width=True)
+    st.dataframe(leaders.sort_values('Profitto_Tot', ascending=False), use_container_width=True)
+
+with t3:
+    st.subheader("Deep Dive Temporale")
+    c_a, c_b = st.columns(2)
+    with c_a:
+        st.write("**Performance per Ora del Giorno**")
+        hourly = df.groupby('ora')['pnl'].sum().reset_index()
+        st.plotly_chart(px.bar(hourly, x='ora', y='pnl', template="plotly_dark"), use_container_width=True)
+    with c_b:
+        st.write("**Performance Avanzata per Giorno della Settimana**")
+        # Analisi avanzata richiesta: Profitto medio e frequenza
+        day_analysis = df.groupby('giorno_sett').agg(
+            Profitto_Medio=('pnl', 'mean'),
+            Volume_Trade=('pnl', 'count')
+        ).reindex(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+        fig_day_pro = px.bar(day_analysis.reset_index(), x='giorno_sett', y='Profitto_Medio', 
+                             color='Volume_Trade', template="plotly_dark", title="Efficienza Media Giornaliera")
+        st.plotly_chart(fig_day_pro, use_container_width=True)
+
+with t4:
+    st.subheader("Registro Operazioni Master")
+    st.dataframe(df.sort_values('dt_uscita', ascending=False), use_container_width=True)
